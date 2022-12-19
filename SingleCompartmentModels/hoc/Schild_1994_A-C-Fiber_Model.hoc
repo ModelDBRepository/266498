@@ -1,0 +1,462 @@
+// Author: David Catherall, Nicole Pelot; Grill Lab; Duke University
+// Created: February 2018
+// Description: Simulation File for Single Compartment Model Based on Schild 1994 with code for finding Threshold of the model
+// See README
+
+{load_file("FindThresh.hoc")}				// Binary search algorithm to find threshold
+load_file("nrngui.hoc") 					// Loads NEURON GUI Interface
+
+// Simulation Parameters
+	isafiber 		= 0						// if == 0 - C-type model, if == 1 - A-type model
+	insert97na 		= 1       				// if == 0 - Schild 94 Na mod files included, if == 1 - Schild 97 Na mod files included
+	conductances97 	= 1 					// if == 0 - Schild 94 Conductances, if == 1 - Schild 97 Conductances
+	
+	secondorder 	= 0						// Sets integration method; 0 - Backward Euler, 2 - Crank Nicholson
+	
+	stimfromrest 	= 1						// if == 0 - hold at holdingv during inittime; if == 1 - initialize at Vrest and let settle during inittime
+	holdingv 		= -48					// [mV] holding voltage for cell when stimulated from a holding voltage (i.e., used when stimfromrest = 0)
+	
+	simtime 		= 20					// [ms] time for simulation (for t > 0), using dt)
+	inittime 		= 1000					// [ms] initialization time for cell (for t < 0, using dt_initSS); also seee stimfromrest
+	dt_initSS 		= 1						// [ms]	time step during inittime
+	tstop 			= inittime+simtime		// [ms] total time for simulation, including initialization time
+	dt 				= 0.005					// [ms] time step during simtime
+	num_timesteps 	= int((simtime)/dt) + 1	// [unitless] defines the number of time steps of simtime for defining recording vectors
+	
+	celsius 		= 37					// [degC] sets temperature of simulation; used 22.85 or 37 for Schild 1994
+	
+	find_thresh 	= 1						// if == 0 - stimulate at CurrentClampAmplitude
+											// if == 1 - FindThresh.hoc is used to find threshold
+
+	CurrentClampDuration 	= 2				// [ms] Current Clamp Duration
+	CurrentClampDelay 		= 5				// [ms] Current Clamp Delay
+	CurrentClampAmplitude	= 4.9			// [nA] Current Clamp Amplitude; only used if find_thresh == 0
+	
+	// Only used if find_thresh == 1
+	stimamp_bottom_init	= 0					// [nA] initial lower bound of binary search for thresh 
+	stimamp_top_init	= 6					// [nA] initial upper bound of binary search for thresh 
+	thresh_resoln		= 0.01				// [fraction change] resolution of exit condition for binary search
+	ap_thresh 			= 30				// [mV] threshold for rising edge of Vm to define an action potential
+	
+	strdef filename
+	filename = "test.dat"					// Filename for outputs
+	
+	F = 96500								// [C/mole] Faraday's constant from Schild 1994
+	R = 8314								// [J/(kg*mole*K)] Gas constant from Schild 1994
+	
+	// [mV] Specify rest potential, or initial holding potential if not starting from rest
+	if (isafiber) {
+		v_init = -59						// Schild 1994, A-type
+	} else {
+		if (conductances97) {
+			v_init = -67					// Schild 1997, C-type
+		} else {
+			v_init = -48					// Schild 1994, C-type					
+		}
+	}
+	if (!stimfromrest) {
+		v_init = holdingv					// [mV] clamping at holdingv during inittime
+	}
+	
+// Create Compartment
+	create soma
+	access soma
+
+	soma {
+		// Compartment Geometry
+		// diam = 20 and L = 45 matches the volume and surface area from Schild 1994
+			diam = 20 						// [um] diameter of compartment
+			L = 45  						// [um] length of compartment
+			cm = 1.326291192				// [uF/cm^2] specific membrane capacitance
+			nseg = 1
+			
+			Ra = 100						// [ohm-cm] intracellular resistivity; not used for single compartment simulations
+		
+		// Mod file mechanisms for Schild 1994 and 1997 models
+			if (insert97na) {
+				insert naf97mean
+				insert nas97mean
+			} else {
+				insert naf
+				insert nas
+			}
+			insert leak
+			insert kd
+			insert ka
+			insert can
+			insert cat
+			insert kds
+			insert kca
+			insert CaPump
+			insert NaCaPump
+			insert NaKpump
+			insert caext			// Use caextscale for multicompartment simulations, or for geometries other than the default; 
+									// uncomment L_caextscale and nseg_caextscale below
+									// slightly different perineural volume for single compartment simulation
+			insert caint			// Use caintscale for multicompartment simulations, or for geometries other than the default
+									// uncomment L_caintscale and nseg_caintscale below
+			
+			/*
+			L_caintscale = L
+			nseg_caintscale = nseg
+			L_caextscale = L
+			nseg_caextscale = nseg
+			*/
+			
+		// Ionic concentrations
+			cao0_ca_ion = 2.0							// [mM] Initial Cao Concentration
+			cai0_ca_ion = .000117						// [mM] Initial Cai Concentrations
+			
+			ko = 5.4									// [mM] External K Concentration
+			ki = 145.0									// [mM] Internal K Concentration
+			kstyle = ion_style("k_ion",1,2,0,0,0) 		// Allows ek to be calculated manually
+			ek = ((R*(celsius+273.15))/F)*log(ko/ki)	// Manual Calculation of ek in order to use Schild F and R values
+			
+			nao = 154.0									// [mM] External Na Concentration
+			nai = 8.9									// [mM] Internal Na Concentration
+			nastyle = ion_style("na_ion",1,2,0,0,0) 	// Allows ena to be calculated manually
+			ena = ((R*(celsius+273.15))/F)*log(nao/nai)	// Manual Calculation of ena in order to use Schild F and R values
+			
+		// [S/cm^2] This block sets the conductances to the values in Schild 1997
+			if (conductances97){				
+				gbar_naf97mean	= 0.022434928
+				gbar_nas97mean	= 0.022434928
+				gbar_kd			= 0.001956534
+				gbar_ka			= 0.001304356
+				gbar_kds		= 0.000782614
+				gbar_kca		= 0.000913049
+				gbar_can		= 0.000521743
+				gbar_cat		= 0.00018261
+				gbna_leak		= 1.8261E-05
+				gbca_leak	 	= 9.13049E-06
+			}
+	
+
+	// A-fiber Parameters
+	// This block sets the conductances, voltage shifts, and capacitance to their A-type model values, per Schild 1994
+		if (isafiber){				
+			gbar_naf		= 0.072503919 	// [S/cm^2] 
+			shiftnaf_naf	= 0				// [mV] 
+			gbar_nas		= 3.53678E-07
+			shiftnas_nas	= 0
+			gbar_kd			= 0.000194523
+			shiftkd_kd		= 0
+			gbar_ka			= 0.001237872
+			shiftka_ka		= 0
+			gbar_kds		= 0.000353678
+			shiftkds_kds	= 0
+			gbar_kca		= 0.00022989
+			gbar_can		= 3.53678E-05
+			shiftcan_can	= 0
+			gbar_cat		= 1.23787E-05
+			shiftcan_cat	= 0
+			gbna_leak		= 1.14945E-05
+			soma.cm			= 1.149452367
+		}
+	}
+		
+// Set up APCount to check for threshold crossings (used if find_thresh == 1)
+	objref apc
+		soma apc = new APCount(0.5)
+		apc.thresh = ap_thresh
+
+// Stimulation Parameters
+
+	// Add voltage clamp
+	// This clamp is for holding the cell at a particular voltage before a current clamp is used to stimulate the cell.
+	objref holdingclamp
+		if (!stimfromrest) {
+			soma holdingclamp   = new VClamp(0.5)
+			holdingclamp.dur[0] = 0
+			holdingclamp.amp[0] = -80
+			holdingclamp.dur[1] = inittime
+			holdingclamp.amp[1] = holdingv
+			holdingclamp.dur[2] = 0
+			holdingclamp.amp[2] = -80
+		}
+
+	//Current Clamp
+	objref mystim
+		soma mystim = new IClamp(0.5)
+		mystim.dur  = CurrentClampDuration
+		mystim.amp  = CurrentClampAmplitude
+		mystim.del  = CurrentClampDelay
+
+// Vectors created to hold data
+	// Record Vm(t)
+	objref Vm_vec1
+		Vm_vec1 = new Vector(num_timesteps,0)
+		Vm_vec1.label("Vm1")						// Vector Label for NEURON GUI Plots
+		Vm_vec1.record(&soma.v(0.25),dt) 			// Variable to be recorded
+	
+	objref Vm_vec2
+		Vm_vec2 = new Vector(num_timesteps,0)
+		Vm_vec2.label("Vm2")						// Vector Label for NEURON GUI Plots
+		Vm_vec2.record(&soma.v(0.5),dt) 			// Variable to be recorded
+	
+/*	
+	// Record Inaf(t)
+	objref Inaf_vec
+		Inaf_vec = new Vector(num_timesteps,0)
+		Inaf_vec.label("Inaf")
+		if (insert97na) {
+			Inaf_vec.record(&soma.ina_naf97mean(0.5),dt)
+		} else {
+			Inaf_vec.record(&soma.ina_naf(0.5),dt)
+		}
+		
+	// Record Inas(t)
+	objref Inas_vec
+		Inas_vec = new Vector(num_timesteps,0)
+		Inas_vec.label("Inas")
+		if (insert97na) {
+			Inas_vec.record(&soma.ina_nas97mean(0.5),dt)
+		} else {
+			Inas_vec.record(&soma.ina_nas(0.5),dt)
+		}
+		
+	// Record Ik(t)
+	objref Ik_vec
+		Ik_vec = new Vector(num_timesteps,0)
+		Ik_vec.label("Ik")
+		Ik_vec.record(&soma.ik_kd(0.5),dt)
+
+	// Record Ika(t)
+	objref Ika_vec
+		Ika_vec = new Vector(num_timesteps,0)
+		Ika_vec.label("Ika")
+		Ika_vec.record(&soma.ik_ka(0.5),dt)
+
+	// Record Ikd(t)
+	objref Ikd_vec
+		Ikd_vec = new Vector(num_timesteps,0)
+		Ikd_vec.label("Ikd")
+		Ikd_vec.record(&soma.ik_kds(0.5),dt)
+
+	// Record Ikca(t)
+	objref Ikca_vec
+		Ikca_vec = new Vector(num_timesteps,0)
+		Ikca_vec.label("Ikca")
+		Ikca_vec.record(&soma.ik_kca(0.5),dt)
+		
+	// Record Ican(t)
+	objref Ican_vec
+		Ican_vec = new Vector(num_timesteps,0)
+		Ican_vec.label("Ican")
+		Ican_vec.record(&soma.ica_can(0.5),dt)
+		
+	// Record Icat(t)
+	objref Icat_vec
+		Icat_vec = new Vector(num_timesteps,0)
+		Icat_vec.label("Icat")
+		Icat_vec.record(&soma.ica_cat(0.5),dt)
+		
+	// Record Icaleak(t)
+	objref Icaleak_vec
+		Icaleak_vec = new Vector(num_timesteps,0)
+		Icaleak_vec.label("Icaleak")
+		Icaleak_vec.record(&soma.ica_leak(0.5),dt)
+		
+	// Record Inaleak(t)
+	objref Inaleak_vec
+		Inaleak_vec = new Vector(num_timesteps,0)
+		Inaleak_vec.label("Inaleak")
+		Inaleak_vec.record(&soma.ina_leak(0.5),dt)
+		
+	// Record INaCa(t)
+	objref INaCa_vec
+		INaCa_vec = new Vector(num_timesteps,0)
+		INaCa_vec.label("INaCa")
+		INaCa_vec.record(&soma.inca_NaCaPump(0.5),dt)
+		
+	// Record ICaPump(t)
+	objref ICaPump_vec
+		ICaPump_vec = new Vector(num_timesteps,0)
+		ICaPump_vec.label("ICaPump")
+		ICaPump_vec.record(&soma.ica_CaPump(0.5),dt)
+		
+	// Record INaK(t)
+	objref INaK_vec
+		INaK_vec = new Vector(num_timesteps,0)
+		INaK_vec.label("INaK")
+		INaK_vec.record(&soma.ink_NaKpump(0.5),dt)
+		
+	// Record Ena
+	objref Ena_vec
+		Ena_vec = new Vector(num_timesteps,0)
+		Ena_vec.label("Ena")
+		Ena_vec.record(&soma.ena(0.5))
+		
+	// Record Ek
+	objref Ek_vec
+		Ek_vec = new Vector(num_timesteps,0)
+		Ek_vec.label("Ek")
+		Ek_vec.record(&soma.ek(0.5))
+		
+	// Record Eca
+	objref Eca_vec
+		Eca_vec = new Vector(num_timesteps,0)
+		Eca_vec.label("Eca")
+		Eca_vec.record(&soma.ecan_can(0.5))
+		
+	// Record cai
+	objref cai_vec
+		cai_vec = new Vector(num_timesteps,0)
+		cai_vec.label("cai")
+		cai_vec.record(&soma.cai(0.5))
+		
+	// Record cao
+	objref cao_vec
+		cao_vec = new Vector(num_timesteps,0)
+		cao_vec.label("cao")
+		cao_vec.record(&soma.cao(0.5))
+*/		
+	
+// Simulation Initialized and Advanced	
+	//Initialization when cell is stimulated from rest
+	proc stimul() {local myampl
+		myampl = $1
+		mystim.amp = myampl			// Sets amplitude of current clamp based on the input variable of the stimul() process
+		check_AP = 0				// Variable to track if action potential occurred
+		if (!stimfromrest){
+			holdingclamp.dur[1]=inittime	// Needs to be reset between FindThresh cycles
+		}
+		
+		finitialize(v_init)			// Model initialized
+			
+		// Allow time for model to read steady-state using large dt before actually starting stimulation
+		dtsav = dt						// Store value of dt for later
+		dt = dt_initSS					// Set dt to large dt to speed simulation in initialization phase
+		if (stimfromrest) {
+			t = -inittime
+			while (t <= -dt) {		// Advance until t = 0
+				fadvance()
+			}
+		} else {
+			mystim.del = inittime		// Current Clamp Delay set to inittime so that it is not active during voltage clamp.																								   
+			while (t <= inittime-dt) { 	// Voltage Clamp is only on from t=0, so cannot run cell in negative time
+				fadvance()
+			}
+		}
+		dt = dtsav						// Reset dt to simulation dt
+		t = 0							// Set t to 0, but with initialized values
+		fcurrent()						// Sets all currents and other assigned values in accordance with current values of state variables.
+		frecord_init()					// Initializes recording vectors
+		if (!stimfromrest){
+			holdingclamp.dur[1]=0		// Turns off voltage clamp so that current clamp can take effect
+		}
+		mystim.del=CurrentClampDelay	// Sets Current Clamp delay to CurrentClampDelay, so that it will be active at appropriate time.
+		
+		// Simulation Time loop
+		while (t<=simtime){
+			fadvance()
+		}
+		if (find_thresh == 1) {
+		print "Checking for AP"
+		check_AP = apc.n			// Detected an action potential
+		}
+	}
+
+	if (find_thresh == 0){
+		
+		stimul(CurrentClampAmplitude)		// If threshold is not needed, stimulate at predefined amplitude
+
+	} else {
+
+		FindThresh()						// If threshold is desired, run threshold search, which stimulates at many different amplitudes until threshold is determined
+		
+		print "Done searching! Thresh: ", stimamp, "nA"
+	}
+	
+
+// Data Calculation
+/*
+	// I_leak is the combination of the Na and Ca Background Currents
+	objref Ileak_vec
+		Ileak_vec = new Vector(num_timesteps,0)
+		Ileak_vec.label("Ileak")
+	for i=0,Icaleak_vec.size()-1 Ileak_vec.x[i]=Icaleak_vec.x[i]+Inaleak_vec.x[i]
+
+	// I_mem is the total membrane currents calculated by adding all of the membrane currents up
+	objref Imem_vec
+		Imem_vec = new Vector(num_timesteps,0)
+		Imem_vec.label("Imem")
+	for i=0,Vm_vec.size()-1 Imem_vec.x[i]=Inaf_vec.x[i]+Inas_vec.x[i]+Ik_vec.x[i]+Ika_vec.x[i]+Ikd_vec.x[i]+Ican_vec.x[i]+Ikca_vec.x[i]+ Icat_vec.x[i]+INaCa_vec.x[i]+ICaPump_vec.x[i]+INaK_vec.x[i]+Ileak_vec.x[i]
+*/
+
+// Data Plotting in NEURON GUI
+	// Voltage Plot
+	objref g1, g2
+	proc plot_voltage() {
+		g1 = new Graph()
+		g1.size(0, simtime, -100, 100)
+		Vm_vec1.plot(g1,dt)
+		//Eca_vec.plot(g1,dt)
+		//Ena_vec.plot(g1,dt)
+		//Ek_vec.plot(g1,dt)
+		
+		g2 = new Graph()
+		g2.size(0, simtime, -100, 100)
+		Vm_vec2.plot(g2,dt)
+	}
+	plot_voltage()
+
+/*
+	// Component Current Plot
+	objref g2
+	proc plot_I() {
+		g2 = new Graph()
+		g2.size(0, simtime, -0.01, 0.01)
+		Inaf_vec.plot(g2,dt)
+		Inas_vec.plot(g2,dt)
+		Ik_vec.plot(g2,dt)
+		Ikd_vec.plot(g2,dt)
+		Ika_vec.plot(g2,dt)
+		Ikca_vec.plot(g2,dt)
+		Ican_vec.plot(g2,dt)
+	}
+	plot_I()
+
+	// Background Current Plot
+	objref g3
+	proc plot_Iback() {
+		g3 = new Graph()
+		g3.size(0, simtime, -.004, .004)
+		INaCa_vec.plot(g3,dt)
+		INaK_vec.plot(g3,dt)
+		Ileak_vec.plot(g3,dt)
+	}
+	plot_Iback()
+
+	// Membrane Current Plot
+	objref g4
+	proc plot_Imem() {
+		g4 = new Graph()
+		g4.size(0, simtime, -.06, .02)
+		Imem_vec.plot(g4,dt)
+	}
+	plot_Imem()
+*/
+	
+// Files for data output created.
+/*
+	// File for recording individual currents (If threshold was found, only saves data for run at threshold.)
+	objref Fig
+		Fig=new File(filename)
+	
+	Fig.wopen(filename)
+
+	Fig.printf("time,\t\t inaf,\t\t inas,\t\t ik,\t\t ika,\t\t ikd,\t\t ikca,\t\t ican,\t\t inaca,\t\t inak,\t\t icap,\t\t ileak,\t\t imem,\t\t vm\n")
+	for i=0,Inaf_vec.size()-1 Fig.printf("%f,\t %f,\t %f,\t %f,\t %f,\t %f,\t %f,\t %f,\t %f,\t %f,\t %f,\t %f,\t %f,\t %f\n",i*dt,Inaf_vec.x[i],Inas_vec.x[i],Ik_vec.x[i],Ika_vec.x[i],Ikd_vec.x[i],Ikca_vec.x[i],Ican_vec.x[i],INaCa_vec.x[i],INaK_vec.x[i],ICaPump_vec.x[i],Ileak_vec.x[i],Imem_vec.x[i],Vm_vec.x[i])
+	Fig.close()
+ */
+	// File to record membrane voltage (If threshold was found, only saves data for run at threshold.)
+	objref Fig
+		Fig=new File(filename)
+	
+	Fig.wopen(filename)
+
+	for i=0,Vm_vec1.size()-1 Fig.printf("%f,\t %f,\t %f\n",i*dt,Vm_vec1.x[i],Vm_vec2.x[i])
+	Fig.close()
+	
+	

@@ -1,0 +1,155 @@
+// Author: David Catherall; Grill Lab; Duke University
+// Created: December 2016
+// Description: Voltage Clamp Simulation File for Single Compartment Model Based on Schild 1994
+
+load_file("nrngui.hoc")						// Loads NEURON GUI Interface
+
+// Simulation Parameters
+	secondorder 	= 0						// Sets integration method; 0 - Backward Euler, 2 - Crank Nicholson
+
+	celsius 		= 22.85					// [degC] sets temperature of simulation
+	
+	v_init 			= -80					// [mV] Initial Voltage
+	inittime 		= 0						// [ms] Length of Conditioning. This can be 0 if cell does not have 
+											// mechanisms inserted that need to equilibrate e.g. Calcium dynamics
+	clampinit 		= v_init				// [mV] Conditioning Level for Clamp. Usually same as initial voltage.
+	ClampAmp 		= 0						// [mV] Clamp Voltage
+	ClampDur 		= 200					// [ms] Length of clamp
+	tstop 			= inittime + ClampDur	// [ms] total time for simulation
+	dt 				= 0.005					// [ms] timestep of simulation	
+	num_timesteps 	= int(tstop/dt) + 1		// [unitless] defines the number of timesteps for vector creation
+	
+	cadynamic 		= 0						/* if == 0 - calcium is treated as constant, 
+											if == 1 - calcium concentrations are only 
+											initialized; make sure to insert caint and caext */
+	napresent 		= 1						// Set to 1 if Na if inserting a mechanism below which uses sodium ions
+	kpresent 		= 0						// Set to 1 if K if inserting a mechanism below which uses potassium ions
+	capresent 		= 1						// Set to 1 if Ca if inserting a mechanism below which uses calcium ions
+	
+	strdef filename
+	filename = "examplefilename.dat"	// Filename for file which saves simulation data
+	
+	F = 96500								// [C/mole] Faraday's Constant from Schild 1994
+	R = 8314								// [J/(kg*mole*K)] Gas Constant from Schild 1994
+
+// Create Compartment
+	create soma
+	access soma
+
+	soma {
+		// Compartment Geometry
+			diam = 20 								// [um] diameter of compartment
+			L = 45  								// [um] This creates a cylinder with the same surface area as the sphere in Schild 1994 in order to ensure conductances are the same.
+			cm = 1.326291192 						// [uF/cm^2] specific membrane capacitance
+		
+		// Mod file mechanisms
+			insert naf								/* Mechanisms inserted for voltage clamp. The "ionpresent" flags above 
+													should be set appropriately to reflect what mechanism is being inserted 
+													into the cell. Note that this works for all main ion mechanisms, but 
+													if background currents are being investigated, recording vectors below
+													may need to be edited*/
+		
+		// Ionic concentrations
+			if (capresent) {
+				if (cadynamic) {
+					cao0_ca_ion = 2.0						// [mM] Initial Cao Concentration
+					cai0_ca_ion = .000117					// [mM] Initial Cai Concentrations
+				} else {
+					cai = .000117							// [mM] Internal Cao Concentration (When Ca is Constant)
+					cao = 2									// [mM] External Cao Concentration (When Ca is Constant)
+				}
+			}
+			if (kpresent) {
+				ko = 5.4									// [mM] External K Concentration
+				ki = 145.0									// [mM] Internal K Concentration
+				kstyle=ion_style("k_ion",1,2,0,0,0) 		// Allows ek to be calculated manually
+				ek = ((R*(celsius+273.15))/F)*log(ko/ki)	// Manual Calculation of ek in order to use Schild F and R values
+			}
+			if (napresent) {
+				nao = 154.0									// [mM] External Na Concentration
+				nai = 8.9									// [mM] Internal Na Concentration
+				nastyle=ion_style("na_ion",1,2,0,0,0) 		// Allows ena to be calculated manually
+				ena = ((R*(celsius+273.15))/F)*log(nao/nai)	// Manual Calculation of ena in order to use Schild F and R values
+			}
+	}
+
+// Stimulation Parameters
+	// Add voltage clamp
+		objref mystim
+			soma mystim = new VClamp(0.5)
+			mystim.dur[0] = inittime
+			mystim.amp[0] = clampinit
+			mystim.dur[1] = ClampDur
+			mystim.amp[1] = ClampAmp
+			mystim.dur[2] = 0
+			mystim.amp[2] = -100
+
+// Vectors created to hold data
+
+	// Record Clamp Current(t)
+		objref ClampCurrent_vec									
+			ClampCurrent_vec = new Vector(num_timesteps,0)
+			ClampCurrent_vec.label("Ion Current")				// Vector Label for NEURON GUI Plots
+			ClampCurrent_vec.record(&soma.ina(0.5),dt)	
+			if (napresent) {
+				ClampCurrent_vec.record(&soma.ina(0.5),dt)			// Variable to be recorded
+			} else if (kpresent) {
+				ClampCurrent_vec.record(&soma.ik(0.5),dt)
+			} else if (capresent) {
+				ClampCurrent_vec.record(&soma.ica(0.5),dt)
+			}
+			/* This vector is set up to record whichever ion current that is being inserted above.
+			If recording a sodium mechanism, ina will be recorded; if recording potassium, ik will 
+			be recorded, etc. However, if the mechanism inserted above includes more than one ionic
+			current, such as many of the background current, this vector will need to be edited to
+			reflect which ion current is desired. For example, if NaCaPump is inserted above, both
+			na and ca currents will be created. If both currents are of interest, a second vector
+			will need to be created which records the other current. Alternatively, this vector can
+			be set to record the mechanism current, instead of the individual ion currents by using
+			the statement: ClampCurrent_vec.record(&some.inca_NaCaPump) */
+				
+	// Record Vm(t)
+		objref Vm_vec
+			Vm_vec = new Vector(num_timesteps,0)
+			Vm_vec.label("Vm")
+			Vm_vec.record(&soma.v(0.5),dt)
+			
+// Simulation Initialized and Advanced			
+	proc stimul() {
+		finitialize(v_init)			// Model initialized
+		while(t<tstop) {
+			fadvance()
+		}
+	}
+	stimul()
+	
+// Calculate Bounds for Plot
+	lower = ClampCurrent_vec.min
+	upper = ClampCurrent_vec.max
+
+// Data Plotting in NEURON GUI
+	// Current Plot
+		objref g1
+		proc plot_Current() {
+			g1 = new Graph()
+			g1.size(inittime, tstop, lower, upper)
+			ClampCurrent_vec.plot(g1,dt)
+		}
+		plot_Current()
+	
+	// Voltage Plot (For Visual Confirmation that cell was clamped at correct voltage)
+		objref g2
+		proc plot_voltage() {
+			g2 = new Graph()
+			g2.size(inittime, tstop, -85, 100)
+			Vm_vec.plot(g2,dt)
+		}
+		plot_voltage()
+
+// Files for data output created.
+	objref Fig
+		Fig=new File(filename)
+		
+	Fig.wopen(filename)
+	for i=0,ClampCurrent_vec.size()-1 Fig.printf("%f,\t %f,\t %f\n",i*dt,ClampCurrent_vec.x[i],ClampCurrent2_vec.x[i])
+	Fig.close()

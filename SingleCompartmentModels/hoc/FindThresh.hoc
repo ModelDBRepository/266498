@@ -1,0 +1,73 @@
+/*
+Author: Nikki Pelot, modified by David Catherall; Grill Lab; Duke University
+Date created: February 5, 2016
+
+Description:
+- Binary search algorithm to find threshold.
+
+Variables that must be defined in wrapper/params file:
+- thresh_resoln
+- stimamp_bottom_init
+- stimamp_top_init
+*/
+
+// Vector containing results to pass back to batch run
+objref thresh_values
+Nresults = 1
+thresh_values = new Vector(Nresults,0)
+
+// Find threshold with a binary search algorithm
+proc FindThresh() {
+	// Check that the initial stimamp_top is large enough to elicit an AP
+	stimul(stimamp_top_init)
+	check_AP_top = check_AP
+	print "check_AP, checking top_init: ", check_AP
+	
+	// Check that the initial stimamp_bottom is small enough to not elicit an AP
+	stimul(stimamp_bottom_init)
+	check_AP_bottom = check_AP
+
+	// Check if initial stimamp_top is sufficient. If yes, proceed to binary search algorithm.
+	if (check_AP_top == 0) {
+		print "ERROR: Initial stimamp_top value does not elicit an AP - need to increase its magnitude"
+		return 0
+	} else if (check_AP_bottom == 1) {
+		print "ERROR: Initial stimamp_bottom value elicits an AP - need to decrease its magnitude"
+		return 0
+	} else {
+		stimamp_top = stimamp_top_init
+		stimamp_bottom = stimamp_bottom_init 
+		
+		while(1) {
+			stimamp = (stimamp_bottom + stimamp_top) / 2
+			print "stimamp = ", stimamp, "nA"
+			stimul(stimamp)
+
+			if ((abs((stimamp_bottom - stimamp_top) / stimamp_top)) < thresh_resoln) {	// resolution of search
+				// Use last amplitude that produced an action potential
+				if (check_AP == 0) {
+					stimamp = stimamp_prev
+				} 
+				
+				print "Done searching! stimamp: ", stimamp, "nA"
+				
+				stimul(stimamp)
+				if (check_AP == 0) {
+					print "ERROR: Final stimamp value does not elicit an AP"
+					return 0
+				}
+				
+				break
+			} else if (check_AP == 1) {				// found an AP
+				stimamp_prev = stimamp
+				stimamp_top = stimamp
+			} else if (check_AP == 0) {				// no AP
+				stimamp_bottom = stimamp
+			}
+		}
+
+		print "Threshold: ", stimamp, "mA"
+		
+		thresh_values.x[0] = stimamp
+	}
+}
