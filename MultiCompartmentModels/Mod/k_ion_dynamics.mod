@@ -23,7 +23,7 @@ UNITS {
 }
 
 PARAMETER {
-    kiinf	= 144.9		(mM) : 144.9
+    kiinf	= 121.7		(mM) : 144.9
     koinf	= 5.6   	(mM)
     theta	= 14.5e-3	(um)
     D		= 0.1e-6 	(m/s)			: Scriven1981

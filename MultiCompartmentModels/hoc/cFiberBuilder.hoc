@@ -111,7 +111,7 @@ proc build(){
 					celsiusT_nav1p8 = temp
 					celsiusT_nav1p9 = temp
 					celsiusT_nakpump = temp
-					celsiusT_kdr 	= temp   
+					celsiusT_kdrTiger = temp   
 					v=-55
 				}else if(type == 3){// Rattay and Aberham Fiber
 					insert RattayAberham// Model adjusted for a resting potential of -70mV instead of 0 (subtract Vrest from each reversal potential)
